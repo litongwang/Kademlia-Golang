@@ -174,6 +174,11 @@ func TestIterativeFindNode(t *testing.T) {
 	instance2 := NewKademlia("localhost:7305")
 	host2, port2, _ := StringToIpPort("localhost:7305")
 	instance1.DoPing(host2, port2)
+	contact2, err := instance1.FindContact(instance2.NodeID)
+	if err != nil {
+		t.Error("Instance 2's contact not found in Instance 1's contact list")
+		return
+	}
 	tree_node := make([]*Kademlia, kNum)
 	//t.Log("Before loop")
 	for i := 0; i < kNum; i++ {
@@ -184,7 +189,7 @@ func TestIterativeFindNode(t *testing.T) {
 	}
 	for i := 0; i < kNum; i++ {
 		if i != targetIdx {
-			tree_node[targetIdx].DoPing(tree_node[i].SelfContact.Host, tree_node[i].SelfContact.Port)
+			tree_node[i].DoPing(tree_node[targetIdx].SelfContact.Host, tree_node[targetIdx].SelfContact.Port)
 		}
 	}
 	SearchKey := tree_node[targetIdx].SelfContact.NodeID
@@ -194,7 +199,7 @@ func TestIterativeFindNode(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	cHeap := PriorityQueue{instance2.SelfContact, []Contact{}, SearchKey}
 	//t.Log("Wait for iterative")
-	res, err := tree_node[19].DoIterativeFindNode(SearchKey)
+	res, err := instance2.DoIterativeFindNode(SearchKey)
 	if err != nil {
 		t.Error(err.Error())
 	}
