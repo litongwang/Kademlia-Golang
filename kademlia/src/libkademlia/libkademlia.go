@@ -491,37 +491,38 @@ func (k *Kademlia) Iterative(key ID, findValue bool) iterativeResult {
 		ret.err = &CommandFailed{"No node in kBucket"}
 		return ret
 	}
-	/*
-		interval := 5
-		t := time.NewTicker(time.Duration(interval) * time.Second)
-		quit := make(chan bool)
-		signal := false
-		go func() {
-			for !signal {
-				select {
-				case <-quit:
-					signal = <-quit
-				case <-t.C:
-					req := heapRequest{3, make(chan heapResult), nil}
-					heapReq <- req
-					PopResult := <-req.channel
-					for i := 0; i < alpha && i < PopResult.length; i++ {
-						contact := PopResult.contacts[i]
-						go k.doFind(contact, key, findValue, respChannel)
-					}
+	interval := 2
+	t := time.NewTicker(time.Duration(interval) * time.Second)
+	quit := make(chan bool)
+	signal := false
+	go func() {
+		for !signal {
+			select {
+			case <-quit:
+				signal = <-quit
+			case <-t.C:
+				req := heapRequest{3, make(chan heapResult), nil}
+				heapReq <- req
+				PopResult := <-req.channel
+				for i := 0; i < alpha && i < PopResult.length; i++ {
+					contact := PopResult.contacts[i]
+					go k.doFind(contact, key, findValue, respChannel)
 				}
 			}
-		}()
-	*/
+		}
+	}()
+
 	//logic for iteration
 	for activeNodes.Len() < 20 {
-		req := heapRequest{3, make(chan heapResult), nil}
-		heapReq <- req
-		PopResult := <-req.channel
-		for i := 0; i < alpha && i < PopResult.length; i++ {
-			contact := PopResult.contacts[i]
-			go k.doFind(contact, key, findValue, respChannel)
-		}
+		/*
+		   req := heapRequest{3, make(chan heapResult), nil}
+		   		heapReq <- req
+		   		PopResult := <-req.channel
+		   		for i := 0; i < alpha && i < PopResult.length; i++ {
+		   			contact := PopResult.contacts[i]
+		   			go k.doFind(contact, key, findValue, respChannel)
+		   		}
+		*/
 		result := <-respChannel
 		if result.success {
 			flag := true
