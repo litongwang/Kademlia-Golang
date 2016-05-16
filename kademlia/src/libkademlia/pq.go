@@ -22,8 +22,8 @@ func (pq PriorityQueue) Less(i, j int) bool {
 	return contactLess(&pq.List[i], &pq.List[j], pq.NodeID)
 }
 
-func (pq PriorityQueue) Swap(i, j int) {
-	pq.List[i], pq.List[j] = pq.List[j], pq.List[i]
+func (pq PriorityQueue) Swap(ii, jj int) {
+	pq.List[ii], pq.List[jj] = pq.List[jj], pq.List[ii]
 }
 
 func (pq *PriorityQueue) Pop() interface{} {
