@@ -255,8 +255,6 @@ func (k *Kademlia) DoPing(host net.IP, port uint16) (*Contact, error) {
 	case <-time.After(10 * time.Second):
 		return nil, &CommandFailed{"Time Out"}
 	}
-	log.Printf("ping msgID:%s\n", ping.MsgID.AsString())
-	log.Printf("pong msgID:%s\n", pong.MsgID.AsString())
 	if !ping.MsgID.Equals(pong.MsgID) {
 		return nil, &CommandFailed{"Wrong MsgID"}
 	}
@@ -265,6 +263,42 @@ func (k *Kademlia) DoPing(host net.IP, port uint16) (*Contact, error) {
 	return &result, nil
 }
 
+/*
+InternalPing: for ping the LRU contact to decide whether replace it
+ping without send update query
+*/
+func (k *Kademlia) InternalPing(host net.IP, port uint16) (*Contact, error) {
+	ping := PingMessage{k.SelfContact, NewRandomID()}
+	var pong PongMessage
+	address := host.String() + ":" + strconv.Itoa(int(port))
+	path := rpc.DefaultRPCPath + strconv.Itoa(int(port))
+	client, err := rpc.DialHTTPPath("tcp", address, path)
+	defer client.Close()
+	if err != nil {
+		return nil, &CommandFailed{"HTTP Connect Error"}
+	}
+	/*
+		Use channel to decide time out
+	*/
+	errorChannel := make(chan error, 1)
+	go func() {
+		errorChannel <- client.Call("KademliaRPC.Ping", ping, &pong)
+	}()
+	select {
+	case err := <-errorChannel:
+		if err != nil {
+			log.Fatal("CallDoPing:", err)
+			return nil, err
+		}
+	case <-time.After(10 * time.Second):
+		return nil, &CommandFailed{"Time Out"}
+	}
+	if !ping.MsgID.Equals(pong.MsgID) {
+		return nil, &CommandFailed{"Wrong MsgID"}
+	}
+	result := pong.Sender
+	return &result, nil
+}
 func (k *Kademlia) DoStore(contact *Contact, key ID, value []byte) error {
 	// TODO: Implement
 	request := StoreRequest{k.SelfContact, NewRandomID(), key, value}
@@ -331,7 +365,7 @@ func (k *Kademlia) DoFindNode(contact *Contact, searchKey ID) ([]Contact, error)
 		for _, node := range result.Nodes {
 			k.updatechannel <- updatecommand{node}
 		}
-		return result.Nodes, result.Err
+		return result.Nodes, nil
 	}
 	return nil, result.Err
 }
@@ -453,12 +487,10 @@ func (k *Kademlia) HandleHeap(key ID, Req chan heapRequest) {
 					// ignore when self ID is returned
 					if !node.NodeID.Equals(k.NodeID) {
 						heap.Push(pq, node)
-						log.Printf("Push into Heap :%s\n", node.NodeID.AsString())
 						nodeSet[node.NodeID.AsString()] = true
 					}
 				}
 			}
-			fmt.Println("Handle Heap execute")
 			request.channel <- heapResult{pq.Len(), nil}
 		case 3:
 			// Pop the close element from the heap
@@ -502,22 +534,9 @@ func (k *Kademlia) Iterative(key ID, findValue bool) iterativeResult {
 		ret.err = &CommandFailed{"No node in kBucket"}
 		return ret
 	}
-	/*
-		go func() {
-			for {
-				req := heapRequest{3, make(chan heapResult), nil}
-				heapReq <- req
-				PopResult := <-req.channel
-				for _, node := range PopResult.contacts {
-					go k.doFind(node, key, findValue, respChannel)
-				}
-				time.Sleep(300 * time.Millisecond)
-			}
-		}()
-	*/
 	//logic for iteration
-	breakflag := true
-	for activeNodes.Len() < 20 && breakflag {
+outerloop:
+	for activeNodes.Len() < 20 {
 		count := 0
 		req := heapRequest{3, 3, make(chan heapResult), nil}
 		heapReq <- req
@@ -526,7 +545,8 @@ func (k *Kademlia) Iterative(key ID, findValue bool) iterativeResult {
 			go k.doFind(node, key, findValue, respChannel)
 			count++
 		}
-		for breakflag {
+	innerloop:
+		for {
 			select {
 			case result := <-respChannel:
 				count--
@@ -534,8 +554,6 @@ func (k *Kademlia) Iterative(key ID, findValue bool) iterativeResult {
 					flag := true
 					ok, cnode := activeNodes.Peek()
 					heap.Push(activeNodes, result.target)
-					// log.Printf("ADD NodeID:%s\n", result.target.NodeID.AsString())
-					fmt.Println(activeNodes.Len())
 					if ok {
 						flag = false
 						// decide if one of the return node is closer to the object node
@@ -548,32 +566,26 @@ func (k *Kademlia) Iterative(key ID, findValue bool) iterativeResult {
 
 					if findValue && result.value != nil {
 						ret.value = result.value
-						breakflag = false
-						break
+						break outerloop
 					}
-					fmt.Println(activeNodes.Len(), flag)
 					if !flag {
-						breakflag = false
-						break
+						break outerloop
 					}
-					fmt.Println(activeNodes.Len(), "Before channel")
 					req := heapRequest{2, 0, make(chan heapResult), result.activeList}
 					heapReq <- req
 					<-req.channel
-					fmt.Println("Get Push result")
 				}
 
 				if count == 0 {
-					break
+					break innerloop
 				}
 			case <-time.After(300 * time.Millisecond):
-				break
+				fmt.Println("Time out")
+				break innerloop
 			}
 		}
-		fmt.Println("End of For loop", activeNodes.Len(), breakflag)
 	}
 
-	fmt.Println("after loop", activeNodes.Len())
 	if findValue && ret.value != nil {
 		for activeNodes.Len() > 0 {
 			ret.activeList = append(ret.activeList, heap.Pop(activeNodes).(Contact))
@@ -581,8 +593,7 @@ func (k *Kademlia) Iterative(key ID, findValue bool) iterativeResult {
 		ret.success = true
 		return ret
 	}
-	fmt.Println("before make up", activeNodes.Len())
-
+OuterLoop:
 	for activeNodes.Len() < 20 {
 		length := 20 - activeNodes.Len()
 		count := 0
@@ -593,27 +604,25 @@ func (k *Kademlia) Iterative(key ID, findValue bool) iterativeResult {
 			go k.doFind(node, key, findValue, respChannel)
 			count++
 		}
+	InnerLoop:
 		for {
 			result := <-respChannel
-			fmt.Println("After receive from channel", activeNodes.Len(), result.success)
 			if result.success {
 				if findValue && result.value != nil {
 					ret.value = result.value
-					break
+					break OuterLoop
 				}
 				heap.Push(activeNodes, result.target)
+			}
+			count--
+			if count == 0 {
+				break InnerLoop
 			}
 			requestForLengthReq := heapRequest{1, 0, make(chan heapResult), nil}
 			heapReq <- requestForLengthReq
 			length_result := <-requestForLengthReq.channel
-
 			if length_result.length <= 0 {
-				fmt.Println("Break")
-				break
-			}
-			count--
-			if count == 0 {
-				break
+				break OuterLoop
 			}
 		}
 	}
@@ -653,9 +662,7 @@ func (k *Kademlia) DoIterativeStore(key ID, value []byte) ([]Contact, error) {
 	if result.success {
 		for _, node := range result.activeList {
 			k.DoStore(&node, key, value)
-			fmt.Println("Store NodeID:" + node.NodeID.AsString())
 		}
-		fmt.Println("Stored and return contacts")
 		return result.activeList, nil
 	}
 	return nil, result.err
